@@ -1,36 +1,21 @@
 package expo.modules.httpserver
 
-import android.os.Bundle
-import androidx.core.os.bundleOf
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import fi.iki.elonen.NanoHTTPD
-import java.util.UUID
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-
-data class PendingResponse(
-    val statusCode: Int,
-    val contentType: String,
-    val body: String,
-    val headers: Map<String, String>
-)
 
 class HttpServerModule : Module() {
     private var server: LifeFlowServer? = null
-    private val pendingRequests = ConcurrentHashMap<String, CompletableFuture<PendingResponse>>()
+    private val feeds = ConcurrentHashMap<String, String>()
+    private val audioUrls = ConcurrentHashMap<String, String>()
 
     override fun definition() = ModuleDefinition {
         Name("HttpServer")
 
-        Events("onRequest")
-
         AsyncFunction("start") { port: Int ->
-            if (server != null) {
-                server?.stop()
-            }
-            server = LifeFlowServer(port, this@HttpServerModule)
+            server?.stop()
+            server = LifeFlowServer(port)
             server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             return@AsyncFunction true
         }
@@ -38,69 +23,76 @@ class HttpServerModule : Module() {
         AsyncFunction("stop") {
             server?.stop()
             server = null
-            // Cancel all pending requests
-            pendingRequests.values.forEach {
-                it.complete(PendingResponse(503, "text/plain", "Server stopping", emptyMap()))
-            }
-            pendingRequests.clear()
+            feeds.clear()
+            audioUrls.clear()
             return@AsyncFunction true
         }
 
-        Function("respond") { requestId: String, statusCode: Int, contentType: String, body: String, locationHeader: String? ->
-            val headers = mutableMapOf<String, String>()
-            if (locationHeader != null) {
-                headers["Location"] = locationHeader
-            }
-            pendingRequests[requestId]?.complete(
-                PendingResponse(statusCode, contentType, body, headers)
-            )
+        Function("setFeed") { podcastId: String, xml: String ->
+            feeds[podcastId] = xml
+        }
+
+        Function("setAudioUrl") { mediaId: String, url: String ->
+            audioUrls[mediaId] = url
+        }
+
+        Function("clearFeeds") {
+            feeds.clear()
+        }
+
+        Function("clearAudioUrls") {
+            audioUrls.clear()
         }
 
         Function("isRunning") {
             return@Function server?.isAlive == true
         }
-    }
 
-    fun handleRequest(uri: String, method: String, queryString: String?): PendingResponse {
-        val requestId = UUID.randomUUID().toString()
-        val future = CompletableFuture<PendingResponse>()
-        pendingRequests[requestId] = future
-
-        sendEvent("onRequest", bundleOf(
-            "requestId" to requestId,
-            "uri" to uri,
-            "method" to method,
-            "query" to (queryString ?: "")
-        ))
-
-        return try {
-            future.get(30, TimeUnit.SECONDS)
-        } catch (e: Exception) {
-            PendingResponse(504, "text/plain", "Request timeout", emptyMap())
-        } finally {
-            pendingRequests.remove(requestId)
+        Function("diagnostics") {
+            return@Function "feeds=${feeds.size}, audioUrls=${audioUrls.size}, running=${server?.isAlive == true}"
         }
     }
 
-    inner class LifeFlowServer(port: Int, private val module: HttpServerModule) : NanoHTTPD(port) {
+    inner class LifeFlowServer(port: Int) : NanoHTTPD(port) {
         override fun serve(session: IHTTPSession): Response {
-            val result = module.handleRequest(
-                session.uri,
-                session.method.name,
-                session.queryParameterString
-            )
+            val uri = session.uri ?: ""
 
-            val response = newFixedLengthResponse(
-                Response.Status.lookup(result.statusCode) ?: Response.Status.INTERNAL_ERROR,
-                result.contentType,
-                result.body
-            )
-
-            for ((key, value) in result.headers) {
-                response.addHeader(key, value)
+            // Route: /feed/:podcastId
+            val feedMatch = Regex("^/feed/([a-zA-Z0-9_-]+)$").find(uri)
+            if (feedMatch != null) {
+                val podcastId = feedMatch.groupValues[1]
+                val xml = feeds[podcastId]
+                return if (xml != null) {
+                    newFixedLengthResponse(Response.Status.OK, "application/rss+xml; charset=utf-8", xml)
+                } else {
+                    newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Feed not found: $podcastId")
+                }
             }
 
-            return response
+            // Route: /audio/:mediaId
+            val audioMatch = Regex("^/audio/([a-zA-Z0-9_-]+)$").find(uri)
+            if (audioMatch != null) {
+                val mediaId = audioMatch.groupValues[1]
+                val url = audioUrls[mediaId]
+                return if (url != null) {
+                    val response = newFixedLengthResponse(Response.Status.REDIRECT, "text/plain", "")
+                    response.addHeader("Location", url)
+                    response
+                } else {
+                    newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Audio not found: $mediaId")
+                }
+            }
+
+            // Route: / — health check
+            if (uri == "/" || uri.isEmpty()) {
+                return newFixedLengthResponse(
+                    Response.Status.OK,
+                    "text/plain",
+                    "LifeFlow Bridge running. Feeds: ${feeds.size}, Audio URLs: ${audioUrls.size}"
+                )
+            }
+
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found: $uri")
         }
     }
 }

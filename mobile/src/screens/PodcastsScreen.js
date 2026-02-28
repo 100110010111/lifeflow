@@ -9,9 +9,11 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
-  Clipboard,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { createLNClient } from '../ln-client.js';
+import { generateFeed } from '../feed.js';
+import { parseShowNotes } from '../show-notes.js';
 import { clearCredentials } from '../auth.js';
 
 const IMAGE_BASE = 'https://imagedelivery.net/0UfIQ3lQQ7vsurILwUoUag';
@@ -23,23 +25,17 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   const [serverRunning, setServerRunning] = useState(false);
   const [serverStatus, setServerStatus] = useState('');
   const [serverError, setServerError] = useState(null);
-  const listenerRef = useRef(null);
+  const clientRef = useRef(null);
 
   useEffect(() => {
     loadPodcasts();
-    return () => {
-      // Cleanup on unmount
-      if (listenerRef.current) {
-        listenerRef.current.remove();
-        listenerRef.current = null;
-      }
-    };
   }, []);
 
   async function loadPodcasts() {
     try {
       const client = createLNClient(credentials);
       await client.login();
+      clientRef.current = client;
       const items = await client.getPodcasts();
       setPodcasts(items);
     } catch (err) {
@@ -54,10 +50,6 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       try {
         setServerStatus('Stopping...');
         const HttpServer = await import('../../modules/http-server');
-        if (listenerRef.current) {
-          listenerRef.current.remove();
-          listenerRef.current = null;
-        }
         await HttpServer.stop();
         setServerRunning(false);
         setServerStatus('');
@@ -69,57 +61,119 @@ export default function PodcastsScreen({ credentials, onLogout }) {
     }
 
     setServerError(null);
+    const client = clientRef.current;
+
+    if (!client) {
+      setServerError('Not authenticated. Try logging out and back in.');
+      return;
+    }
 
     try {
-      // Step 1: Import native module
-      setServerStatus('Loading HTTP server module...');
       const HttpServer = await import('../../modules/http-server');
 
-      // Step 2: Authenticate with Life Network
-      setServerStatus('Authenticating with Life Network...');
-      const { createRequestHandler } = await import('../request-handler.js');
-      const client = createLNClient(credentials);
-      await client.login();
-
-      // Step 3: Set up request handler
-      setServerStatus('Setting up request handler...');
-      const handler = createRequestHandler({
-        client,
-        baseUrl: `http://localhost:${PORT}`,
-      });
-
-      // Step 4: Attach request listener
-      setServerStatus('Attaching request listener...');
-      listenerRef.current = HttpServer.addRequestListener(async (event) => {
-        const { requestId, uri, method, query } = event;
-        try {
-          const response = await handler(uri, method, query);
-          HttpServer.respond(
-            requestId,
-            response.statusCode,
-            response.contentType,
-            response.body,
-            response.locationHeader || null
-          );
-        } catch (err) {
-          HttpServer.respond(requestId, 500, 'text/plain', 'Internal server error', null);
-        }
-      });
-
-      // Step 5: Start server
-      setServerStatus('Starting HTTP server on port ' + PORT + '...');
+      // Step 1: Start the HTTP server
+      setServerStatus('Starting HTTP server...');
       await HttpServer.start(PORT);
 
+      // Step 2: Generate feeds for each podcast
+      let feedCount = 0;
+      let audioCount = 0;
+
+      for (const item of podcasts) {
+        const podcast = item.content;
+        setServerStatus(`Generating feed: ${podcast.title}...`);
+
+        try {
+          const [podcastData, episodeList] = await Promise.all([
+            client.getPodcast(podcast.id),
+            client.getEpisodes(podcast.id),
+          ]);
+
+          // Fetch episode details in parallel (batched)
+          const episodeDetails = await Promise.all(
+            episodeList.map(ep =>
+              client.getEpisodeDetail(podcast.id, ep.content.id).catch(() => null)
+            )
+          );
+
+          // Resolve author name
+          let authorName = 'Life Network';
+          try {
+            const contributor = await client.getContributor(podcastData.metadata.authorProfileId);
+            if (contributor?.profile?.userProfile) {
+              const p = contributor.profile.userProfile;
+              authorName = `${p.firstName || ''} ${p.lastName || ''}`.trim() || authorName;
+            }
+          } catch {}
+
+          // Build episodes array and collect audio URLs
+          const episodes = episodeList.map((ep, i) => {
+            const detail = episodeDetails[i];
+            const audioMediaId = detail?.body?.audioMediaId || null;
+
+            // Pre-register audio URL if available
+            if (audioMediaId) {
+              // We'll fetch audio URLs lazily when needed, but register the ID
+              audioCount++;
+            }
+
+            return {
+              id: ep.content.id,
+              title: ep.content.title,
+              publishedAt: ep.content.publishedAt,
+              description: detail ? parseShowNotes(detail.body?.showNotes) : '',
+              audioMediaId,
+              heroImageId: ep.content.heroImageId,
+            };
+          });
+
+          // Generate RSS XML
+          const feedPodcast = {
+            id: podcast.id,
+            title: podcastData.metadata.title,
+            authorName,
+            heroImageId: podcastData.metadata.heroImageId,
+            publishedAt: podcastData.metadata.publishedAt,
+          };
+
+          const xml = generateFeed({
+            podcast: feedPodcast,
+            episodes,
+            baseUrl: `http://localhost:${PORT}`,
+          });
+
+          // Push feed to native module
+          HttpServer.setFeed(podcast.id, xml);
+          feedCount++;
+
+          // Pre-fetch audio URLs for this podcast's episodes
+          setServerStatus(`Fetching audio URLs for ${podcast.title}...`);
+          const audioPromises = episodes
+            .filter(ep => ep.audioMediaId)
+            .map(async (ep) => {
+              try {
+                const signedUrl = await client.getAudioUrl(ep.audioMediaId);
+                HttpServer.setAudioUrl(ep.audioMediaId, signedUrl);
+              } catch {}
+            });
+          await Promise.all(audioPromises);
+
+        } catch (err) {
+          // Skip this podcast on error, continue with others
+          console.warn(`Failed to generate feed for ${podcast.title}:`, err);
+        }
+      }
+
       setServerRunning(true);
-      setServerStatus('Running on localhost:' + PORT);
+      setServerStatus(`Serving ${feedCount} feeds on localhost:${PORT}`);
     } catch (err) {
       setServerError(err.message || String(err));
       setServerStatus('');
-      // Cleanup on failure
-      if (listenerRef.current) {
-        listenerRef.current.remove();
-        listenerRef.current = null;
-      }
+      // Try to stop server if it was started
+      try {
+        const HttpServer = await import('../../modules/http-server');
+        await HttpServer.stop();
+      } catch {}
     }
   }
 
@@ -127,10 +181,6 @@ export default function PodcastsScreen({ credentials, onLogout }) {
     try {
       if (serverRunning) {
         const HttpServer = await import('../../modules/http-server');
-        if (listenerRef.current) {
-          listenerRef.current.remove();
-          listenerRef.current = null;
-        }
         await HttpServer.stop();
       }
     } catch {}
@@ -139,22 +189,22 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   }
 
   function subscribePodcast(podcastId) {
-    const feedUrl = `http://localhost:${PORT}/feed/${podcastId}`;
-
     if (!serverRunning) {
       Alert.alert('Server Not Running', 'Start the feed server first, then subscribe.');
       return;
     }
+
+    const feedUrl = `http://localhost:${PORT}/feed/${podcastId}`;
 
     // Use pcast:// scheme — widely supported by podcast apps
     const pcastUrl = `pcast://localhost:${PORT}/feed/${podcastId}`;
 
     Linking.openURL(pcastUrl).catch(() => {
       // Fallback: copy to clipboard and instruct user
-      Clipboard.setString(feedUrl);
+      Clipboard.setStringAsync(feedUrl);
       Alert.alert(
         'Feed URL Copied',
-        'The feed URL has been copied to your clipboard.\n\nOpen your podcast app → tap + → RSS Feed → paste the URL:\n\n' + feedUrl,
+        'The feed URL has been copied to your clipboard.\n\nOpen your podcast app, tap + then RSS Feed, and paste:\n\n' + feedUrl,
       );
     });
   }
@@ -211,8 +261,8 @@ export default function PodcastsScreen({ credentials, onLogout }) {
         </Text>
       </TouchableOpacity>
 
-      {serverStatus !== '' && !serverError && (
-        <Text style={styles.statusText}>{serverStatus}</Text>
+      {serverStatus !== '' && (
+        <Text style={serverError ? styles.errorText : styles.statusText}>{serverStatus}</Text>
       )}
 
       {serverError && (
