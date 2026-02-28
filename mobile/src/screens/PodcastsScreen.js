@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
+  Clipboard,
 } from 'react-native';
 import { createLNClient } from '../ln-client.js';
 import { clearCredentials } from '../auth.js';
@@ -20,10 +21,19 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   const [podcasts, setPodcasts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [serverRunning, setServerRunning] = useState(false);
+  const [serverStatus, setServerStatus] = useState('');
   const [serverError, setServerError] = useState(null);
+  const listenerRef = useRef(null);
 
   useEffect(() => {
     loadPodcasts();
+    return () => {
+      // Cleanup on unmount
+      if (listenerRef.current) {
+        listenerRef.current.remove();
+        listenerRef.current = null;
+      }
+    };
   }, []);
 
   async function loadPodcasts() {
@@ -42,30 +52,87 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   async function toggleServer() {
     if (serverRunning) {
       try {
-        const { stopBackgroundService } = await import('../background-service.js');
-        await stopBackgroundService();
+        setServerStatus('Stopping...');
+        const HttpServer = await import('../../modules/http-server');
+        if (listenerRef.current) {
+          listenerRef.current.remove();
+          listenerRef.current = null;
+        }
+        await HttpServer.stop();
         setServerRunning(false);
+        setServerStatus('');
         setServerError(null);
       } catch (err) {
-        Alert.alert('Error', 'Failed to stop server: ' + err.message);
+        setServerError('Stop failed: ' + (err.message || String(err)));
       }
-    } else {
-      try {
-        setServerError(null);
-        const { startBackgroundService } = await import('../background-service.js');
-        await startBackgroundService({ ...credentials, port: PORT });
-        setServerRunning(true);
-      } catch (err) {
-        setServerError(err.message);
-        Alert.alert('Server Error', 'Failed to start server: ' + err.message);
+      return;
+    }
+
+    setServerError(null);
+
+    try {
+      // Step 1: Import native module
+      setServerStatus('Loading HTTP server module...');
+      const HttpServer = await import('../../modules/http-server');
+
+      // Step 2: Authenticate with Life Network
+      setServerStatus('Authenticating with Life Network...');
+      const { createRequestHandler } = await import('../request-handler.js');
+      const client = createLNClient(credentials);
+      await client.login();
+
+      // Step 3: Set up request handler
+      setServerStatus('Setting up request handler...');
+      const handler = createRequestHandler({
+        client,
+        baseUrl: `http://localhost:${PORT}`,
+      });
+
+      // Step 4: Attach request listener
+      setServerStatus('Attaching request listener...');
+      listenerRef.current = HttpServer.addRequestListener(async (event) => {
+        const { requestId, uri, method, query } = event;
+        try {
+          const response = await handler(uri, method, query);
+          HttpServer.respond(
+            requestId,
+            response.statusCode,
+            response.contentType,
+            response.body,
+            response.locationHeader || null
+          );
+        } catch (err) {
+          HttpServer.respond(requestId, 500, 'text/plain', 'Internal server error', null);
+        }
+      });
+
+      // Step 5: Start server
+      setServerStatus('Starting HTTP server on port ' + PORT + '...');
+      await HttpServer.start(PORT);
+
+      setServerRunning(true);
+      setServerStatus('Running on localhost:' + PORT);
+    } catch (err) {
+      setServerError(err.message || String(err));
+      setServerStatus('');
+      // Cleanup on failure
+      if (listenerRef.current) {
+        listenerRef.current.remove();
+        listenerRef.current = null;
       }
     }
   }
 
   async function handleLogout() {
     try {
-      const { stopBackgroundService } = await import('../background-service.js');
-      await stopBackgroundService();
+      if (serverRunning) {
+        const HttpServer = await import('../../modules/http-server');
+        if (listenerRef.current) {
+          listenerRef.current.remove();
+          listenerRef.current = null;
+        }
+        await HttpServer.stop();
+      }
     } catch {}
     await clearCredentials();
     onLogout();
@@ -73,13 +140,22 @@ export default function PodcastsScreen({ credentials, onLogout }) {
 
   function subscribePodcast(podcastId) {
     const feedUrl = `http://localhost:${PORT}/feed/${podcastId}`;
-    Linking.openURL(`podcastaddict://subscribe/${encodeURIComponent(feedUrl)}`).catch(() => {
-      Linking.openURL(feedUrl).catch(() => {
-        Alert.alert(
-          'Feed URL',
-          `Copy this URL and add it to your podcast app:\n\n${feedUrl}`,
-        );
-      });
+
+    if (!serverRunning) {
+      Alert.alert('Server Not Running', 'Start the feed server first, then subscribe.');
+      return;
+    }
+
+    // Use pcast:// scheme — widely supported by podcast apps
+    const pcastUrl = `pcast://localhost:${PORT}/feed/${podcastId}`;
+
+    Linking.openURL(pcastUrl).catch(() => {
+      // Fallback: copy to clipboard and instruct user
+      Clipboard.setString(feedUrl);
+      Alert.alert(
+        'Feed URL Copied',
+        'The feed URL has been copied to your clipboard.\n\nOpen your podcast app → tap + → RSS Feed → paste the URL:\n\n' + feedUrl,
+      );
     });
   }
 
@@ -134,6 +210,10 @@ export default function PodcastsScreen({ credentials, onLogout }) {
           {serverRunning ? 'Server Running — Tap to Stop' : 'Start Feed Server'}
         </Text>
       </TouchableOpacity>
+
+      {serverStatus !== '' && !serverError && (
+        <Text style={styles.statusText}>{serverStatus}</Text>
+      )}
 
       {serverError && (
         <Text style={styles.errorText}>{serverError}</Text>
@@ -197,7 +277,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginBottom: 8,
     padding: 14,
     borderRadius: 8,
     gap: 10,
@@ -223,6 +303,12 @@ const styles = StyleSheet.create({
   },
   statusOff: {
     backgroundColor: '#f44336',
+  },
+  statusText: {
+    color: '#6db3f2',
+    fontSize: 12,
+    paddingHorizontal: 16,
+    marginBottom: 4,
   },
   errorText: {
     color: '#f44336',
