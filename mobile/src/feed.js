@@ -1,54 +1,75 @@
-import RSS from 'rss';
-
 const IMAGE_BASE = 'https://imagedelivery.net/0UfIQ3lQQ7vsurILwUoUag';
+
+function escapeXml(str) {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
 
 export function generateFeed({ podcast, episodes, baseUrl }) {
   const imageUrl = podcast.heroImageId
     ? `${IMAGE_BASE}/${podcast.heroImageId}/public`
-    : undefined;
+    : '';
+  const author = podcast.authorName || 'Life Network';
+  const description = `${podcast.title} — via LifeFlow Bridge`;
 
-  const feed = new RSS({
-    title: podcast.title,
-    description: `${podcast.title} — via LifeFlow Bridge`,
-    feed_url: `${baseUrl}/feed/${podcast.id}`,
-    site_url: `https://app.joinlifenetwork.com/podcasts/${podcast.id}`,
-    image_url: imageUrl,
-    pubDate: new Date(podcast.publishedAt),
-    custom_namespaces: {
-      itunes: 'http://www.itunes.com/dtds/podcast-1.0.dtd',
-    },
-    custom_elements: [
-      { 'itunes:author': podcast.authorName || 'Life Network' },
-      { 'itunes:summary': `${podcast.title} — via LifeFlow Bridge` },
-      imageUrl
-        ? { 'itunes:image': { _attr: { href: imageUrl } } }
-        : null,
-    ].filter(Boolean),
-  });
+  let xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>${escapeXml(podcast.title)}</title>
+    <description>${escapeXml(description)}</description>
+    <link>https://app.joinlifenetwork.com/podcasts/${escapeXml(podcast.id)}</link>
+    <pubDate>${new Date(podcast.publishedAt).toUTCString()}</pubDate>
+    <itunes:author>${escapeXml(author)}</itunes:author>
+    <itunes:summary>${escapeXml(description)}</itunes:summary>`;
+
+  if (imageUrl) {
+    xml += `
+    <image>
+      <url>${escapeXml(imageUrl)}</url>
+      <title>${escapeXml(podcast.title)}</title>
+      <link>https://app.joinlifenetwork.com/podcasts/${escapeXml(podcast.id)}</link>
+    </image>
+    <itunes:image href="${escapeXml(imageUrl)}" />`;
+  }
 
   for (const ep of episodes) {
     const epImageUrl = ep.heroImageId
       ? `${IMAGE_BASE}/${ep.heroImageId}/public`
       : imageUrl;
+    const epDescription = ep.description || '';
 
-    feed.item({
-      title: ep.title,
-      description: ep.description || '',
-      url: `https://app.joinlifenetwork.com/podcasts/${podcast.id}/${ep.id}`,
-      guid: ep.id,
-      date: new Date(ep.publishedAt),
-      enclosure: ep.audioMediaId
-        ? { url: `${baseUrl}/audio/${ep.audioMediaId}`, type: 'audio/mpeg' }
-        : undefined,
-      custom_elements: [
-        { 'itunes:author': podcast.authorName || 'Life Network' },
-        { 'itunes:summary': ep.description || '' },
-        epImageUrl
-          ? { 'itunes:image': { _attr: { href: epImageUrl } } }
-          : null,
-      ].filter(Boolean),
-    });
+    xml += `
+    <item>
+      <title>${escapeXml(ep.title)}</title>
+      <description>${escapeXml(epDescription)}</description>
+      <link>https://app.joinlifenetwork.com/podcasts/${escapeXml(podcast.id)}/${escapeXml(ep.id)}</link>
+      <guid isPermaLink="false">${escapeXml(ep.id)}</guid>
+      <pubDate>${new Date(ep.publishedAt).toUTCString()}</pubDate>
+      <itunes:author>${escapeXml(author)}</itunes:author>
+      <itunes:summary>${escapeXml(epDescription)}</itunes:summary>`;
+
+    if (ep.audioMediaId) {
+      xml += `
+      <enclosure url="${escapeXml(baseUrl)}/audio/${escapeXml(ep.audioMediaId)}" type="audio/mpeg" />`;
+    }
+
+    if (epImageUrl) {
+      xml += `
+      <itunes:image href="${escapeXml(epImageUrl)}" />`;
+    }
+
+    xml += `
+    </item>`;
   }
 
-  return feed.xml({ indent: true });
+  xml += `
+  </channel>
+</rss>`;
+
+  return xml;
 }

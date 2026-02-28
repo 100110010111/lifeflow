@@ -6,7 +6,9 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "lifeflow",
-    "platforms": ["android"],
+    "platforms": [
+      "android"
+    ],
     "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -31,6 +33,12 @@
       "expo-secure-store",
       "./plugins/withCleartextTraffic",
       "./plugins/withForegroundServiceType"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9d821e4b-d5b4-4457-894e-56dab9e05f69"
+      }
+    },
+    "owner": "iilliliiiilll"
   }
 }
