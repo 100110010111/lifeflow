@@ -15,7 +15,7 @@ export function createRequestHandler({ client, baseUrl }) {
 
   return async function handleRequest(uri, method, query) {
     // Route: /audio/:mediaId
-    const audioMatch = uri.match(/^\/audio\/([a-zA-Z0-9]+)$/);
+    const audioMatch = uri.match(/^\/audio\/([a-zA-Z0-9_-]+)$/);
     if (audioMatch) {
       try {
         const mediaId = audioMatch[1];
@@ -32,7 +32,7 @@ export function createRequestHandler({ client, baseUrl }) {
     }
 
     // Route: /feed/:podcastId
-    const feedMatch = uri.match(/^\/feed\/([a-zA-Z0-9]+)$/);
+    const feedMatch = uri.match(/^\/feed\/([a-zA-Z0-9_-]+)$/);
     if (feedMatch) {
       try {
         const podcastId = feedMatch[1];
