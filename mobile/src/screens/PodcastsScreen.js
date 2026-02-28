@@ -11,11 +11,6 @@ import {
   Alert,
 } from 'react-native';
 import { createLNClient } from '../ln-client.js';
-import {
-  startBackgroundService,
-  stopBackgroundService,
-  isBackgroundServiceRunning,
-} from '../background-service.js';
 import { clearCredentials } from '../auth.js';
 
 const IMAGE_BASE = 'https://imagedelivery.net/0UfIQ3lQQ7vsurILwUoUag';
@@ -25,10 +20,10 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   const [podcasts, setPodcasts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [serverRunning, setServerRunning] = useState(false);
+  const [serverError, setServerError] = useState(null);
 
   useEffect(() => {
     loadPodcasts();
-    startService();
   }, []);
 
   async function loadPodcasts() {
@@ -38,32 +33,47 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       const items = await client.getPodcasts();
       setPodcasts(items);
     } catch (err) {
-      Alert.alert('Error', 'Failed to load podcasts');
+      Alert.alert('Error', 'Failed to load podcasts: ' + err.message);
     } finally {
       setLoading(false);
     }
   }
 
-  async function startService() {
-    try {
-      await startBackgroundService({ ...credentials, port: PORT });
-      setServerRunning(true);
-    } catch (err) {
-      Alert.alert('Error', 'Failed to start background server');
+  async function toggleServer() {
+    if (serverRunning) {
+      try {
+        const { stopBackgroundService } = await import('../background-service.js');
+        await stopBackgroundService();
+        setServerRunning(false);
+        setServerError(null);
+      } catch (err) {
+        Alert.alert('Error', 'Failed to stop server: ' + err.message);
+      }
+    } else {
+      try {
+        setServerError(null);
+        const { startBackgroundService } = await import('../background-service.js');
+        await startBackgroundService({ ...credentials, port: PORT });
+        setServerRunning(true);
+      } catch (err) {
+        setServerError(err.message);
+        Alert.alert('Server Error', 'Failed to start server: ' + err.message);
+      }
     }
   }
 
   async function handleLogout() {
-    await stopBackgroundService();
+    try {
+      const { stopBackgroundService } = await import('../background-service.js');
+      await stopBackgroundService();
+    } catch {}
     await clearCredentials();
     onLogout();
   }
 
   function subscribePodcast(podcastId) {
     const feedUrl = `http://localhost:${PORT}/feed/${podcastId}`;
-    // Try to open in Podcast Addict, fall back to clipboard
     Linking.openURL(`podcastaddict://subscribe/${encodeURIComponent(feedUrl)}`).catch(() => {
-      // If Podcast Addict intent doesn't work, try generic RSS intent
       Linking.openURL(feedUrl).catch(() => {
         Alert.alert(
           'Feed URL',
@@ -109,15 +119,30 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       <View style={styles.header}>
         <Text style={styles.title}>LifeFlow Bridge</Text>
         <View style={styles.headerRight}>
-          <View style={[styles.statusDot, serverRunning ? styles.statusOn : styles.statusOff]} />
           <TouchableOpacity onPress={handleLogout}>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
         </View>
       </View>
 
+      <TouchableOpacity
+        style={[styles.serverButton, serverRunning ? styles.serverButtonOn : styles.serverButtonOff]}
+        onPress={toggleServer}
+      >
+        <View style={[styles.statusDot, serverRunning ? styles.statusOn : styles.statusOff]} />
+        <Text style={styles.serverButtonText}>
+          {serverRunning ? 'Server Running — Tap to Stop' : 'Start Feed Server'}
+        </Text>
+      </TouchableOpacity>
+
+      {serverError && (
+        <Text style={styles.errorText}>{serverError}</Text>
+      )}
+
       <Text style={styles.subtitle}>
-        Tap Subscribe to add a podcast to your player
+        {serverRunning
+          ? 'Tap Subscribe to add a podcast to your player'
+          : 'Start the server first, then subscribe to podcasts'}
       </Text>
 
       <FlatList
@@ -168,6 +193,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 8,
   },
+  serverButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 8,
+    gap: 10,
+  },
+  serverButtonOff: {
+    backgroundColor: '#16213e',
+  },
+  serverButtonOn: {
+    backgroundColor: '#1b3a1b',
+  },
+  serverButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+  },
   statusDot: {
     width: 10,
     height: 10,
@@ -178,6 +223,12 @@ const styles = StyleSheet.create({
   },
   statusOff: {
     backgroundColor: '#f44336',
+  },
+  errorText: {
+    color: '#f44336',
+    fontSize: 12,
+    paddingHorizontal: 16,
+    marginBottom: 8,
   },
   logoutText: {
     color: '#6db3f2',
