@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.httpserver'
+version = '0.7.9'
+
+android {
+  namespace "expo.modules.httpserver"
+  defaultConfig {
+    versionCode 1
+    versionName "0.7.9"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
