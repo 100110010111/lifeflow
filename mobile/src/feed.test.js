@@ -7,7 +7,7 @@ describe('generateFeed', () => {
       id: 'pod1',
       title: 'Test Podcast',
       authorName: 'Dr. Test',
-      heroImageId: 'img-abc',
+      imageUrl: 'https://images.example.com/podcast.jpg',
       publishedAt: '2025-06-01T00:00:00',
     };
 
@@ -18,7 +18,7 @@ describe('generateFeed', () => {
         publishedAt: '2025-06-15T10:00:00',
         description: 'First episode description.',
         audioMediaId: 'audio1',
-        heroImageId: 'img-ep1',
+        imageUrl: 'https://images.example.com/ep1.jpg',
       },
       {
         id: 'ep2',
@@ -26,7 +26,7 @@ describe('generateFeed', () => {
         publishedAt: '2025-07-01T10:00:00',
         description: 'Second episode description.',
         audioMediaId: 'audio2',
-        heroImageId: 'img-ep2',
+        imageUrl: 'https://images.example.com/ep2.jpg',
       },
     ];
 
@@ -39,6 +39,8 @@ describe('generateFeed', () => {
     expect(xml).toContain('Episode Two');
     expect(xml).toContain('https://bridge.example.com/audio/audio1');
     expect(xml).toContain('https://bridge.example.com/audio/audio2');
+    expect(xml).toContain('https://images.example.com/podcast.jpg');
+    expect(xml).toContain('https://images.example.com/ep1.jpg');
     expect(xml).toContain('<?xml');
     expect(xml).toContain('<rss');
   });
@@ -48,7 +50,7 @@ describe('generateFeed', () => {
       id: 'pod1',
       title: 'Empty Podcast',
       authorName: 'Nobody',
-      heroImageId: 'img-abc',
+      imageUrl: 'https://images.example.com/empty.jpg',
       publishedAt: '2025-01-01T00:00:00',
     };
 

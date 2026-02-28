@@ -1,5 +1,3 @@
-const IMAGE_BASE = 'https://imagedelivery.net/0UfIQ3lQQ7vsurILwUoUag';
-
 function escapeXml(str) {
   if (!str) return '';
   return str
@@ -11,9 +9,7 @@ function escapeXml(str) {
 }
 
 export function generateFeed({ podcast, episodes, baseUrl }) {
-  const imageUrl = podcast.heroImageId
-    ? `${IMAGE_BASE}/${podcast.heroImageId}/public`
-    : '';
+  const imageUrl = podcast.imageUrl || '';
   const author = podcast.authorName || 'Life Network';
   const description = `${podcast.title} — via LifeFlow Bridge`;
 
@@ -38,9 +34,7 @@ export function generateFeed({ podcast, episodes, baseUrl }) {
   }
 
   for (const ep of episodes) {
-    const epImageUrl = ep.heroImageId
-      ? `${IMAGE_BASE}/${ep.heroImageId}/public`
-      : imageUrl;
+    const epImageUrl = ep.imageUrl || imageUrl;
     const epDescription = ep.description || '';
 
     xml += `
