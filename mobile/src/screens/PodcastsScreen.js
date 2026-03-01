@@ -9,9 +9,12 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
+  AppState,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { createLNClient } from '../ln-client.js';
+import { generateFeed } from '../feed.js';
+import { parseShowNotes } from '../show-notes.js';
 import { clearCredentials } from '../auth.js';
 
 const PORT = 8080;
@@ -22,140 +25,175 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   const [serverRunning, setServerRunning] = useState(false);
   const [serverStatus, setServerStatus] = useState('');
   const [serverError, setServerError] = useState(null);
-  const startedRef = useRef(false);
+  const clientRef = useRef(null);
+  const refreshTimerRef = useRef(null);
 
   useEffect(() => {
-    loadAndStart();
+    loadPodcasts();
     return () => {
-      // Don't stop on unmount — background service keeps running
+      if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     };
   }, []);
 
-  async function loadAndStart() {
+  async function loadPodcasts() {
     try {
       const client = createLNClient(credentials);
       await client.login();
+      clientRef.current = client;
       const items = await client.getPodcasts();
       setPodcasts(items);
-      setLoading(false);
     } catch (err) {
-      setLoading(false);
       Alert.alert('Error', 'Failed to load podcasts: ' + err.message);
-      return;
-    }
-
-    // Auto-start server after UI is showing (separate try/catch so podcast list always shows)
-    if (!startedRef.current) {
-      startedRef.current = true;
-      try {
-        await startServer();
-      } catch (err) {
-        console.warn('[LifeFlow] Auto-start failed:', err?.message || err);
-        setServerError('Server failed to start: ' + (err?.message || String(err)));
-      }
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function startServer() {
+  async function generateAllFeeds(HttpServer, client, podcastItems) {
+    let feedCount = 0;
+
+    for (const item of podcastItems) {
+      const podcast = item.content;
+      const podcastImageUrl = item.renderURL || '';
+      setServerStatus(`Generating feed: ${podcast.title}...`);
+
+      try {
+        const [podcastData, episodeList] = await Promise.all([
+          client.getPodcast(podcast.id),
+          client.getEpisodes(podcast.id),
+        ]);
+
+        const episodeDetails = await Promise.all(
+          episodeList.map(ep =>
+            client.getEpisodeDetail(podcast.id, ep.content.id).catch(() => null)
+          )
+        );
+
+        let authorName = 'Life Network';
+        try {
+          const contributor = await client.getContributor(podcastData.metadata.authorProfileId);
+          if (contributor?.profile?.userProfile) {
+            const p = contributor.profile.userProfile;
+            authorName = `${p.firstName || ''} ${p.lastName || ''}`.trim() || authorName;
+          }
+        } catch {}
+
+        const episodes = episodeList.map((ep, i) => {
+          const detail = episodeDetails[i];
+          return {
+            id: ep.content.id,
+            title: ep.content.title,
+            publishedAt: ep.content.publishedAt,
+            description: detail ? parseShowNotes(detail.body?.showNotes) : '',
+            audioMediaId: detail?.body?.audioMediaId || null,
+            imageUrl: ep.renderURL || podcastImageUrl,
+          };
+        });
+
+        const feedPodcast = {
+          id: podcast.id,
+          title: podcastData.metadata.title,
+          authorName,
+          imageUrl: podcastImageUrl,
+          publishedAt: podcastData.metadata.publishedAt,
+        };
+
+        const xml = generateFeed({
+          podcast: feedPodcast,
+          episodes,
+          baseUrl: `http://localhost:${PORT}`,
+        });
+
+        HttpServer.setFeed(podcast.id, xml);
+        feedCount++;
+
+        // Pre-fetch audio URLs
+        setServerStatus(`Fetching audio URLs for ${podcast.title}...`);
+        const audioPromises = episodes
+          .filter(ep => ep.audioMediaId)
+          .map(async (ep) => {
+            try {
+              const signedUrl = await client.getAudioUrl(ep.audioMediaId);
+              HttpServer.setAudioUrl(ep.audioMediaId, signedUrl);
+            } catch {}
+          });
+        await Promise.all(audioPromises);
+
+      } catch (err) {
+        console.warn(`Failed to generate feed for ${podcast.title}:`, err);
+      }
+    }
+
+    return feedCount;
+  }
+
+  async function toggleServer() {
+    if (serverRunning) {
+      try {
+        setServerStatus('Stopping...');
+        const HttpServer = await import('../../modules/http-server');
+        await HttpServer.stop();
+        if (refreshTimerRef.current) {
+          clearInterval(refreshTimerRef.current);
+          refreshTimerRef.current = null;
+        }
+        setServerRunning(false);
+        setServerStatus('');
+        setServerError(null);
+      } catch (err) {
+        setServerError('Stop failed: ' + (err.message || String(err)));
+      }
+      return;
+    }
+
     setServerError(null);
-    setServerStatus('Starting feed server...');
+    const client = clientRef.current;
+
+    if (!client) {
+      setServerError('Not authenticated. Try logging out and back in.');
+      return;
+    }
 
     try {
-      const { startBackgroundService, isBackgroundServiceRunning } = await import('../background-service.js');
+      const HttpServer = await import('../../modules/http-server');
 
-      if (isBackgroundServiceRunning()) {
-        setServerRunning(true);
-        setServerStatus('Server running');
-        return;
-      }
+      setServerStatus('Starting HTTP server...');
+      await HttpServer.start(PORT);
 
-      await startBackgroundService({ ...credentials, port: PORT });
+      const feedCount = await generateAllFeeds(HttpServer, client, podcasts);
+
+      // Set up periodic refresh (every 30 min: refresh token + regenerate feeds)
+      refreshTimerRef.current = setInterval(async () => {
+        try {
+          await client.refreshToken();
+          HttpServer.clearFeeds();
+          HttpServer.clearAudioUrls();
+          await generateAllFeeds(HttpServer, client, podcasts);
+        } catch {}
+      }, 30 * 60 * 1000);
+
       setServerRunning(true);
-      setServerStatus('Server running');
+      setServerStatus(`Serving ${feedCount} feeds on localhost:${PORT}`);
     } catch (err) {
-      // Fallback: try direct server start without background service
+      setServerError(err.message || String(err));
+      setServerStatus('');
       try {
-        setServerStatus('Starting server (foreground)...');
         const HttpServer = await import('../../modules/http-server');
-        const { generateFeed } = await import('../feed.js');
-        const { parseShowNotes } = await import('../show-notes.js');
-
-        await HttpServer.start(PORT);
-
-        const client = createLNClient(credentials);
-        await client.login();
-        const items = await client.getPodcasts();
-
-        for (const item of items) {
-          const podcast = item.content;
-          try {
-            const [podcastData, episodeList] = await Promise.all([
-              client.getPodcast(podcast.id),
-              client.getEpisodes(podcast.id),
-            ]);
-            const episodeDetails = await Promise.all(
-              episodeList.map(ep =>
-                client.getEpisodeDetail(podcast.id, ep.content.id).catch(() => null)
-              )
-            );
-            let authorName = 'Life Network';
-            try {
-              const contributor = await client.getContributor(podcastData.metadata.authorProfileId);
-              if (contributor?.profile?.userProfile) {
-                const p = contributor.profile.userProfile;
-                authorName = `${p.firstName || ''} ${p.lastName || ''}`.trim() || authorName;
-              }
-            } catch {}
-            const episodes = episodeList.map((ep, i) => {
-              const detail = episodeDetails[i];
-              return {
-                id: ep.content.id,
-                title: ep.content.title,
-                publishedAt: ep.content.publishedAt,
-                description: detail ? parseShowNotes(detail.body?.showNotes) : '',
-                audioMediaId: detail?.body?.audioMediaId || null,
-                imageUrl: ep.renderURL || item.renderURL || '',
-              };
-            });
-            const xml = generateFeed({
-              podcast: {
-                id: podcast.id,
-                title: podcastData.metadata.title,
-                authorName,
-                imageUrl: item.renderURL || '',
-                publishedAt: podcastData.metadata.publishedAt,
-              },
-              episodes,
-              baseUrl: `http://localhost:${PORT}`,
-            });
-            HttpServer.setFeed(podcast.id, xml);
-            await Promise.all(
-              episodes.filter(ep => ep.audioMediaId).map(async (ep) => {
-                try {
-                  const signedUrl = await client.getAudioUrl(ep.audioMediaId);
-                  HttpServer.setAudioUrl(ep.audioMediaId, signedUrl);
-                } catch {}
-              })
-            );
-          } catch {}
-        }
-        setServerRunning(true);
-        setServerStatus('Server running (foreground only)');
-      } catch (fallbackErr) {
-        setServerError(fallbackErr.message || String(fallbackErr));
-        setServerStatus('');
-      }
+        await HttpServer.stop();
+      } catch {}
     }
   }
 
   async function handleLogout() {
     try {
-      const { stopBackgroundService } = await import('../background-service.js');
-      await stopBackgroundService();
-    } catch {}
-    try {
-      const HttpServer = await import('../../modules/http-server');
-      await HttpServer.stop();
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      if (serverRunning) {
+        const HttpServer = await import('../../modules/http-server');
+        await HttpServer.stop();
+      }
     } catch {}
     await clearCredentials();
     onLogout();
@@ -163,7 +201,7 @@ export default function PodcastsScreen({ credentials, onLogout }) {
 
   function subscribePodcast(podcastId) {
     if (!serverRunning) {
-      Alert.alert('Server Not Running', 'The feed server is still starting. Please wait a moment.');
+      Alert.alert('Server Not Running', 'Start the feed server first, then subscribe.');
       return;
     }
 
@@ -213,16 +251,26 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       <View style={styles.header}>
         <Text style={styles.title}>LifeFlow Bridge</Text>
         <View style={styles.headerRight}>
-          <View style={[styles.statusDot, serverRunning ? styles.statusOn : styles.statusOff]} />
           <TouchableOpacity onPress={handleLogout}>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {serverStatus !== '' && !serverError && (
-        <Text style={styles.statusText}>{serverStatus}</Text>
+      <TouchableOpacity
+        style={[styles.serverButton, serverRunning ? styles.serverButtonOn : styles.serverButtonOff]}
+        onPress={toggleServer}
+      >
+        <View style={[styles.statusDot, serverRunning ? styles.statusOn : styles.statusOff]} />
+        <Text style={styles.serverButtonText}>
+          {serverRunning ? 'Server Running — Tap to Stop' : 'Start Feed Server'}
+        </Text>
+      </TouchableOpacity>
+
+      {serverStatus !== '' && (
+        <Text style={serverError ? styles.errorText : styles.statusText}>{serverStatus}</Text>
       )}
+
       {serverError && (
         <Text style={styles.errorText}>{serverError}</Text>
       )}
@@ -230,7 +278,7 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       <Text style={styles.subtitle}>
         {serverRunning
           ? 'Tap Subscribe to add a podcast to your player'
-          : 'Starting feed server...'}
+          : 'Start the server first, then subscribe to podcasts'}
       </Text>
 
       <FlatList
@@ -244,24 +292,124 @@ export default function PodcastsScreen({ credentials, onLogout }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e' },
-  loadingContainer: { flex: 1, backgroundColor: '#1a1a2e', justifyContent: 'center', alignItems: 'center' },
-  loadingText: { color: '#888', marginTop: 16 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 48 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  title: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
-  subtitle: { fontSize: 13, color: '#888', paddingHorizontal: 16, marginBottom: 8 },
-  statusDot: { width: 10, height: 10, borderRadius: 5 },
-  statusOn: { backgroundColor: '#4caf50' },
-  statusOff: { backgroundColor: '#f44336' },
-  statusText: { color: '#6db3f2', fontSize: 12, paddingHorizontal: 16, marginBottom: 4 },
-  errorText: { color: '#f44336', fontSize: 12, paddingHorizontal: 16, marginBottom: 8 },
-  logoutText: { color: '#6db3f2', fontSize: 14 },
-  list: { padding: 16 },
-  podcastCard: { flexDirection: 'row', backgroundColor: '#16213e', borderRadius: 8, marginBottom: 12, overflow: 'hidden' },
-  artwork: { width: 80, height: 80 },
-  podcastInfo: { flex: 1, padding: 12, justifyContent: 'space-between' },
-  podcastTitle: { color: '#fff', fontSize: 15, fontWeight: '500' },
-  subscribeButton: { backgroundColor: '#6db3f2', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4, alignSelf: 'flex-start' },
-  subscribeText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  container: {
+    flex: 1,
+    backgroundColor: '#1a1a2e',
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#1a1a2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#888',
+    marginTop: 16,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    paddingTop: 48,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  subtitle: {
+    fontSize: 13,
+    color: '#888',
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  serverButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 14,
+    borderRadius: 8,
+    gap: 10,
+  },
+  serverButtonOff: {
+    backgroundColor: '#16213e',
+  },
+  serverButtonOn: {
+    backgroundColor: '#1b3a1b',
+  },
+  serverButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  statusOn: {
+    backgroundColor: '#4caf50',
+  },
+  statusOff: {
+    backgroundColor: '#f44336',
+  },
+  statusText: {
+    color: '#6db3f2',
+    fontSize: 12,
+    paddingHorizontal: 16,
+    marginBottom: 4,
+  },
+  errorText: {
+    color: '#f44336',
+    fontSize: 12,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  logoutText: {
+    color: '#6db3f2',
+    fontSize: 14,
+  },
+  list: {
+    padding: 16,
+  },
+  podcastCard: {
+    flexDirection: 'row',
+    backgroundColor: '#16213e',
+    borderRadius: 8,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  artwork: {
+    width: 80,
+    height: 80,
+  },
+  podcastInfo: {
+    flex: 1,
+    padding: 12,
+    justifyContent: 'space-between',
+  },
+  podcastTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  subscribeButton: {
+    backgroundColor: '#6db3f2',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  subscribeText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 });

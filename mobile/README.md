@@ -7,11 +7,11 @@ LifeFlow Bridge runs a local HTTP server on your phone that generates standard R
 ## How It Works
 
 1. Sign in with your Life Network credentials
-2. The app starts a local feed server on `localhost:8080`
+2. Tap **Start Feed Server** to start a local server on `localhost:8080`
 3. Tap **Subscribe** on any podcast to add it to your podcast player
 4. Episodes stream directly from Life Network's servers
 
-The server runs in the background with a persistent notification so your podcast app can refresh feeds anytime.
+Keep the app open while listening — feeds and auth tokens refresh automatically every 30 minutes.
 
 ## Building
 
@@ -56,7 +56,6 @@ npx expo export --platform android
 - **NanoHTTPD** (Kotlin) — lightweight HTTP server running on-device
 - **Static feed generation** — RSS XML is pre-generated in JavaScript and pushed to the native server as static content
 - **expo-secure-store** — credentials stored encrypted on-device
-- **react-native-background-actions** — foreground service keeps the server alive
 
 ## Project Structure
 
@@ -71,7 +70,6 @@ mobile/
 │   │   ├── LoginScreen.js          # Life Network login
 │   │   └── PodcastsScreen.js       # Podcast list + server control
 │   ├── auth.js                     # Secure credential storage
-│   ├── background-service.js       # Foreground service wrapper
 │   ├── feed.js                     # Pure-JS RSS+iTunes feed generator
 │   ├── ln-client.js                # Life Network API client
 │   └── show-notes.js               # Rich text to plain text parser
@@ -82,8 +80,9 @@ mobile/
 
 ## Tips
 
-- **Battery optimization**: Go to Settings > Apps > LifeFlow Bridge > Battery > Unrestricted. This prevents Android from killing the background server.
-- **Feed refresh**: Feeds and auth tokens refresh automatically every 30 minutes.
+- **Keep app open**: The feed server runs while the app is in the foreground. Keep it open (or in recent apps) while listening.
+- **Battery optimization**: Go to Settings > Apps > LifeFlow Bridge > Battery > Unrestricted. This helps prevent Android from killing the app.
+- **Feed refresh**: Feeds and auth tokens refresh automatically every 30 minutes while the server is running.
 - **Audio URLs**: Episode audio uses signed URLs that expire in 24 hours. They're refreshed along with feeds.
 
 ## License

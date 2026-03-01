@@ -23,16 +23,11 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.lifeflow.bridge",
-      "permissions": [
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_DATA_SYNC",
-        "WAKE_LOCK"
-      ]
+      "permissions": []
     },
     "plugins": [
       "expo-secure-store",
-      "./plugins/withCleartextTraffic",
-      "./plugins/withForegroundServiceType"
+      "./plugins/withCleartextTraffic"
     ],
     "extra": {
       "eas": {
