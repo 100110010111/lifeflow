@@ -74,8 +74,7 @@ mobile/
 │   ├── ln-client.js                # Life Network API client
 │   └── show-notes.js               # Rich text to plain text parser
 └── plugins/
-    ├── withCleartextTraffic.js      # Allow localhost HTTP
-    └── withForegroundServiceType.js # Android 14+ service type
+    └── withCleartextTraffic.js      # Allow localhost HTTP
 ```
 
 ## Tips
