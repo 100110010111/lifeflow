@@ -38,15 +38,21 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       const items = await client.getPodcasts();
       setPodcasts(items);
       setLoading(false);
-
-      // Auto-start server if not already running
-      if (!startedRef.current) {
-        startedRef.current = true;
-        await startServer();
-      }
     } catch (err) {
       setLoading(false);
       Alert.alert('Error', 'Failed to load podcasts: ' + err.message);
+      return;
+    }
+
+    // Auto-start server after UI is showing (separate try/catch so podcast list always shows)
+    if (!startedRef.current) {
+      startedRef.current = true;
+      try {
+        await startServer();
+      } catch (err) {
+        console.warn('[LifeFlow] Auto-start failed:', err?.message || err);
+        setServerError('Server failed to start: ' + (err?.message || String(err)));
+      }
     }
   }
 

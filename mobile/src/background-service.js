@@ -1,9 +1,15 @@
-import BackgroundService from 'react-native-background-actions';
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let _BackgroundService = null;
 let _generateFeeds = null;
 let _HttpServer = null;
+
+function getBackgroundService() {
+  if (!_BackgroundService) {
+    _BackgroundService = require('react-native-background-actions').default;
+  }
+  return _BackgroundService;
+}
 
 async function backgroundTask(params) {
   const { email, password, port } = params;
@@ -95,7 +101,8 @@ async function backgroundTask(params) {
   await _generateFeeds();
 
   // Keep alive: refresh token + regenerate feeds every 30 min
-  while (BackgroundService.isRunning()) {
+  const BgService = getBackgroundService();
+  while (BgService.isRunning()) {
     await sleep(30 * 60 * 1000);
     try {
       await client.refreshToken();
@@ -123,11 +130,12 @@ const options = {
 };
 
 export async function startBackgroundService({ email, password, port = 8080 }) {
-  if (BackgroundService.isRunning()) {
+  const BgService = getBackgroundService();
+  if (BgService.isRunning()) {
     return;
   }
 
-  await BackgroundService.start(backgroundTask, {
+  await BgService.start(backgroundTask, {
     ...options,
     parameters: { email, password, port },
   });
@@ -137,11 +145,13 @@ export async function stopBackgroundService() {
   if (_HttpServer) {
     try { await _HttpServer.stop(); } catch {}
   }
-  await BackgroundService.stop();
+  const BgService = getBackgroundService();
+  await BgService.stop();
   _generateFeeds = null;
   _HttpServer = null;
 }
 
 export function isBackgroundServiceRunning() {
-  return BackgroundService.isRunning();
+  const BgService = getBackgroundService();
+  return BgService.isRunning();
 }
