@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LifeFlow Bridge — Privacy Policy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      line-height: 1.7;
+      padding: 2rem 1rem;
+    }
+    .container {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #fff;
+      font-size: 1.8rem;
+      margin-bottom: 0.5rem;
+    }
+    .updated {
+      color: #888;
+      font-size: 0.85rem;
+      margin-bottom: 2rem;
+    }
+    h2 {
+      color: #6db3f2;
+      font-size: 1.15rem;
+      margin-top: 2rem;
+      margin-bottom: 0.5rem;
+    }
+    p, li {
+      margin-bottom: 0.75rem;
+    }
+    ul {
+      padding-left: 1.5rem;
+    }
+    a {
+      color: #6db3f2;
+    }
+    code {
+      background: #16213e;
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: March 1, 2026</p>
+
+    <p>LifeFlow Bridge is an open-source Android app that lets you listen to Life Network podcasts in standard podcast players. This policy explains what data the app handles and how.</p>
+
+    <h2>Data Collection</h2>
+    <p>LifeFlow Bridge does <strong>not</strong> collect, transmit, or store any personal data on external servers. There are no analytics, no tracking, no ads, and no third-party services.</p>
+
+    <h2>Credentials</h2>
+    <p>Your Life Network email and password are used solely to authenticate with the Life Network API. Credentials are stored locally on your device using Android's encrypted keystore (via <code>expo-secure-store</code>). They are never sent anywhere except directly to Life Network's servers at <code>app.joinlifenetwork.com</code>.</p>
+
+    <h2>Local HTTP Server</h2>
+    <p>The app runs a local HTTP server on <code>localhost:8080</code> to serve podcast RSS feeds to your podcast player. This server is only accessible on your device — it does not accept connections from the network or the internet.</p>
+
+    <h2>Network Requests</h2>
+    <p>The app makes requests to:</p>
+    <ul>
+      <li><strong>Life Network API</strong> (<code>app.joinlifenetwork.com</code>) — to authenticate, fetch your podcast subscriptions, episode data, and signed audio URLs.</li>
+    </ul>
+    <p>No other network requests are made.</p>
+
+    <h2>Data Storage</h2>
+    <p>All data is stored locally on your device:</p>
+    <ul>
+      <li>Login credentials — encrypted keystore</li>
+      <li>Podcast feeds and audio URLs — in-memory only (cleared when the app stops)</li>
+    </ul>
+
+    <h2>Data Deletion</h2>
+    <p>To delete all data stored by LifeFlow Bridge:</p>
+    <ul>
+      <li>Tap <strong>Logout</strong> in the app to clear saved credentials, or</li>
+      <li>Uninstall the app to remove all data</li>
+    </ul>
+
+    <h2>Children's Privacy</h2>
+    <p>This app is not directed at children under 13 and does not knowingly collect information from children.</p>
+
+    <h2>Changes</h2>
+    <p>Any updates to this policy will be posted on this page with an updated date.</p>
+
+    <h2>Contact</h2>
+    <p>Questions or concerns? Open an issue at <a href="https://github.com/100110010111/lifeflow/issues">github.com/100110010111/lifeflow/issues</a>.</p>
+  </div>
+</body>
+</html>
