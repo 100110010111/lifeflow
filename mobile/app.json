@@ -23,7 +23,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.lifeflow.bridge",
-      "permissions": []
+      "permissions": [
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_SPECIAL_USE"
+      ]
     },
     "plugins": [
       "expo-secure-store",

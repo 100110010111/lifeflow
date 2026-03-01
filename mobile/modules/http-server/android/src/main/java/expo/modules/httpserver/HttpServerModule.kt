@@ -1,5 +1,7 @@
 package expo.modules.httpserver
 
+import android.content.Intent
+import android.os.Build
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import fi.iki.elonen.NanoHTTPD
@@ -17,6 +19,22 @@ class HttpServerModule : Module() {
             server?.stop()
             server = LifeFlowServer(port)
             server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+
+            // Start foreground service to keep alive in background
+            try {
+                val context = appContext.reactContext ?: return@AsyncFunction true
+                val intent = Intent(context, FeedServerService::class.java)
+                intent.putExtra("statusText", "Serving podcast feeds on localhost:$port")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                // If foreground service fails, server still runs (just won't survive background)
+                android.util.Log.w("HttpServer", "Foreground service failed: ${e.message}")
+            }
+
             return@AsyncFunction true
         }
 
@@ -25,6 +43,15 @@ class HttpServerModule : Module() {
             server = null
             feeds.clear()
             audioUrls.clear()
+
+            // Stop foreground service
+            try {
+                val context = appContext.reactContext ?: return@AsyncFunction true
+                context.stopService(Intent(context, FeedServerService::class.java))
+            } catch (e: Exception) {
+                android.util.Log.w("HttpServer", "Stop service failed: ${e.message}")
+            }
+
             return@AsyncFunction true
         }
 

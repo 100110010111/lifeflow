@@ -26,26 +26,69 @@ export default function PodcastsScreen({ credentials, onLogout }) {
   const [serverStatus, setServerStatus] = useState('');
   const [serverError, setServerError] = useState(null);
   const clientRef = useRef(null);
+  const podcastsRef = useRef([]);
   const refreshTimerRef = useRef(null);
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
-    loadPodcasts();
+    loadAndStart();
     return () => {
       if (refreshTimerRef.current) clearInterval(refreshTimerRef.current);
     };
   }, []);
 
-  async function loadPodcasts() {
+  async function loadAndStart() {
     try {
       const client = createLNClient(credentials);
       await client.login();
       clientRef.current = client;
       const items = await client.getPodcasts();
+      podcastsRef.current = items;
       setPodcasts(items);
     } catch (err) {
       Alert.alert('Error', 'Failed to load podcasts: ' + err.message);
     } finally {
       setLoading(false);
+    }
+
+    // Auto-start server (separate from loading so podcast list always shows)
+    if (!autoStartedRef.current && clientRef.current) {
+      autoStartedRef.current = true;
+      await autoStartServer();
+    }
+  }
+
+  async function autoStartServer() {
+    setServerError(null);
+    const client = clientRef.current;
+    if (!client) return;
+
+    try {
+      const HttpServer = await import('../../modules/http-server');
+
+      setServerStatus('Starting HTTP server...');
+      await HttpServer.start(PORT);
+
+      const feedCount = await generateAllFeeds(HttpServer, client, podcastsRef.current);
+
+      refreshTimerRef.current = setInterval(async () => {
+        try {
+          await client.refreshToken();
+          HttpServer.clearFeeds();
+          HttpServer.clearAudioUrls();
+          await generateAllFeeds(HttpServer, client, podcastsRef.current);
+        } catch {}
+      }, 30 * 60 * 1000);
+
+      setServerRunning(true);
+      setServerStatus(`Serving ${feedCount} feeds on localhost:${PORT}`);
+    } catch (err) {
+      setServerError(err.message || String(err));
+      setServerStatus('');
+      try {
+        const HttpServer = await import('../../modules/http-server');
+        await HttpServer.stop();
+      } catch {}
     }
   }
 
@@ -160,7 +203,7 @@ export default function PodcastsScreen({ credentials, onLogout }) {
       setServerStatus('Starting HTTP server...');
       await HttpServer.start(PORT);
 
-      const feedCount = await generateAllFeeds(HttpServer, client, podcasts);
+      const feedCount = await generateAllFeeds(HttpServer, client, podcastsRef.current);
 
       // Set up periodic refresh (every 30 min: refresh token + regenerate feeds)
       refreshTimerRef.current = setInterval(async () => {
@@ -168,7 +211,7 @@ export default function PodcastsScreen({ credentials, onLogout }) {
           await client.refreshToken();
           HttpServer.clearFeeds();
           HttpServer.clearAudioUrls();
-          await generateAllFeeds(HttpServer, client, podcasts);
+          await generateAllFeeds(HttpServer, client, podcastsRef.current);
         } catch {}
       }, 30 * 60 * 1000);
 
