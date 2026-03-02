@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 class FeedServerService : Service() {
 
@@ -15,11 +16,13 @@ class FeedServerService : Service() {
         const val NOTIFICATION_ID = 1
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        val notification = buildNotification("Starting...")
-        startForeground(NOTIFICATION_ID, notification)
+        startForeground(NOTIFICATION_ID, buildNotification("Starting..."))
+        acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -28,7 +31,45 @@ class FeedServerService : Service() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // App swiped from recents — service keeps running via START_STICKY
+        super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        // Stop the server when the service is destroyed
+        try {
+            HttpServerModule.server?.stop()
+            HttpServerModule.server = null
+        } catch (e: Exception) {
+            android.util.Log.w("FeedServerService", "Error stopping server: ${e.message}")
+        }
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "LifeFlowBridge::FeedServer"
+        ).apply {
+            acquire()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) it.release()
+            }
+            wakeLock = null
+        } catch (e: Exception) {
+            android.util.Log.w("FeedServerService", "Error releasing wake lock: ${e.message}")
+        }
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -54,7 +95,7 @@ class FeedServerService : Service() {
             .build()
     }
 
-    fun updateNotification(text: String) {
+    private fun updateNotification(text: String) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, buildNotification(text))
     }

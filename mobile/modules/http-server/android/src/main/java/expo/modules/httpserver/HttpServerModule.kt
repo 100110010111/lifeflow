@@ -8,19 +8,22 @@ import fi.iki.elonen.NanoHTTPD
 import java.util.concurrent.ConcurrentHashMap
 
 class HttpServerModule : Module() {
-    private var server: LifeFlowServer? = null
-    private val feeds = ConcurrentHashMap<String, String>()
-    private val audioUrls = ConcurrentHashMap<String, String>()
+
+    companion object {
+        var server: LifeFlowServer? = null
+        val feeds = ConcurrentHashMap<String, String>()
+        val audioUrls = ConcurrentHashMap<String, String>()
+    }
 
     override fun definition() = ModuleDefinition {
         Name("HttpServer")
 
         AsyncFunction("start") { port: Int ->
             server?.stop()
-            server = LifeFlowServer(port)
+            server = LifeFlowServer(port, feeds, audioUrls)
             server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
 
-            // Start foreground service to keep alive in background
+            // Start foreground service — this keeps the process alive
             try {
                 val context = appContext.reactContext ?: return@AsyncFunction true
                 val intent = Intent(context, FeedServerService::class.java)
@@ -31,7 +34,6 @@ class HttpServerModule : Module() {
                     context.startService(intent)
                 }
             } catch (e: Exception) {
-                // If foreground service fails, server still runs (just won't survive background)
                 android.util.Log.w("HttpServer", "Foreground service failed: ${e.message}")
             }
 
@@ -44,7 +46,6 @@ class HttpServerModule : Module() {
             feeds.clear()
             audioUrls.clear()
 
-            // Stop foreground service
             try {
                 val context = appContext.reactContext ?: return@AsyncFunction true
                 context.stopService(Intent(context, FeedServerService::class.java))
@@ -79,47 +80,52 @@ class HttpServerModule : Module() {
             return@Function "feeds=${feeds.size}, audioUrls=${audioUrls.size}, running=${server?.isAlive == true}"
         }
     }
+}
 
-    inner class LifeFlowServer(port: Int) : NanoHTTPD(port) {
-        override fun serve(session: IHTTPSession): Response {
-            val uri = session.uri ?: ""
+class LifeFlowServer(
+    port: Int,
+    private val feeds: ConcurrentHashMap<String, String>,
+    private val audioUrls: ConcurrentHashMap<String, String>
+) : NanoHTTPD(port) {
 
-            // Route: /feed/:podcastId
-            val feedMatch = Regex("^/feed/([a-zA-Z0-9_-]+)$").find(uri)
-            if (feedMatch != null) {
-                val podcastId = feedMatch.groupValues[1]
-                val xml = feeds[podcastId]
-                return if (xml != null) {
-                    newFixedLengthResponse(Response.Status.OK, "application/rss+xml; charset=utf-8", xml)
-                } else {
-                    newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Feed not found: $podcastId")
-                }
+    override fun serve(session: IHTTPSession): Response {
+        val uri = session.uri ?: ""
+
+        // Route: /feed/:podcastId
+        val feedMatch = Regex("^/feed/([a-zA-Z0-9_-]+)$").find(uri)
+        if (feedMatch != null) {
+            val podcastId = feedMatch.groupValues[1]
+            val xml = feeds[podcastId]
+            return if (xml != null) {
+                newFixedLengthResponse(Response.Status.OK, "application/rss+xml; charset=utf-8", xml)
+            } else {
+                newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Feed not found: $podcastId")
             }
-
-            // Route: /audio/:mediaId
-            val audioMatch = Regex("^/audio/([a-zA-Z0-9_-]+)$").find(uri)
-            if (audioMatch != null) {
-                val mediaId = audioMatch.groupValues[1]
-                val url = audioUrls[mediaId]
-                return if (url != null) {
-                    val response = newFixedLengthResponse(Response.Status.REDIRECT, "text/plain", "")
-                    response.addHeader("Location", url)
-                    response
-                } else {
-                    newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Audio not found: $mediaId")
-                }
-            }
-
-            // Route: / — health check
-            if (uri == "/" || uri.isEmpty()) {
-                return newFixedLengthResponse(
-                    Response.Status.OK,
-                    "text/plain",
-                    "LifeFlow Bridge running. Feeds: ${feeds.size}, Audio URLs: ${audioUrls.size}"
-                )
-            }
-
-            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found: $uri")
         }
+
+        // Route: /audio/:mediaId
+        val audioMatch = Regex("^/audio/([a-zA-Z0-9_-]+)$").find(uri)
+        if (audioMatch != null) {
+            val mediaId = audioMatch.groupValues[1]
+            val url = audioUrls[mediaId]
+            return if (url != null) {
+                val response = newFixedLengthResponse(Response.Status.REDIRECT, "text/plain", "")
+                response.addHeader("Location", url)
+                response
+            } else {
+                newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Audio not found: $mediaId")
+            }
+        }
+
+        // Route: / — health check
+        if (uri == "/" || uri.isEmpty()) {
+            return newFixedLengthResponse(
+                Response.Status.OK,
+                "text/plain",
+                "LifeFlow Bridge running. Feeds: ${feeds.size}, Audio URLs: ${audioUrls.size}"
+            )
+        }
+
+        return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found: $uri")
     }
 }
