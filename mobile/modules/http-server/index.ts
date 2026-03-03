@@ -40,3 +40,11 @@ export function isRunning(): boolean {
 export function diagnostics(): string {
   return getModule().diagnostics();
 }
+
+export function isIgnoringBatteryOptimizations(): boolean {
+  return getModule().isIgnoringBatteryOptimizations();
+}
+
+export function requestBatteryOptimizationExemption(): boolean {
+  return getModule().requestBatteryOptimizationExemption();
+}

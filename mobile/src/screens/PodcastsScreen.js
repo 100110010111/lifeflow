@@ -82,6 +82,20 @@ export default function PodcastsScreen({ credentials, onLogout }) {
 
       setServerRunning(true);
       setServerStatus(`Serving ${feedCount} feeds on localhost:${PORT}`);
+
+      // Prompt for battery optimization exemption if not already granted
+      try {
+        if (!HttpServer.isIgnoringBatteryOptimizations()) {
+          Alert.alert(
+            'Disable Battery Optimization',
+            'To keep the feed server running overnight so your podcast player can pull episodes, allow LifeFlow Bridge to run in the background without battery restrictions.',
+            [
+              { text: 'Not Now', style: 'cancel' },
+              { text: 'Allow', onPress: () => HttpServer.requestBatteryOptimizationExemption() },
+            ]
+          );
+        }
+      } catch {}
     } catch (err) {
       setServerError(err.message || String(err));
       setServerStatus('');

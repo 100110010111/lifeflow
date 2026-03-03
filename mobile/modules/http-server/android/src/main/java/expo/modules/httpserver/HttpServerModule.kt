@@ -1,7 +1,11 @@
 package expo.modules.httpserver
 
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import fi.iki.elonen.NanoHTTPD
@@ -78,6 +82,27 @@ class HttpServerModule : Module() {
 
         Function("diagnostics") {
             return@Function "feeds=${feeds.size}, audioUrls=${audioUrls.size}, running=${server?.isAlive == true}"
+        }
+
+        Function("isIgnoringBatteryOptimizations") {
+            val context = appContext.reactContext ?: return@Function false
+            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            return@Function pm.isIgnoringBatteryOptimizations(context.packageName)
+        }
+
+        Function("requestBatteryOptimizationExemption") {
+            val context = appContext.reactContext ?: return@Function false
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                return@Function true
+            } catch (e: Exception) {
+                android.util.Log.w("HttpServer", "Battery optimization request failed: ${e.message}")
+                return@Function false
+            }
         }
     }
 }
